@@ -133,8 +133,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       headers: {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
-        "HTTP-Referer": asString(config.httpReferer, "https://paperclip.geiger.local"),
-        "X-Title": asString(config.xTitle, "Geiger Paperclip Test"),
+        "HTTP-Referer": asString(config.httpReferer, "https://paperclip.local"),
+        "X-Title": asString(config.xTitle, "Paperclip OpenRouter Adapter"),
       },
       body: JSON.stringify(body),
     });
