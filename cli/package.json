@@ -1,7 +1,7 @@
 {
   "name": "paperclipai",
   "version": "0.3.1",
-  "description": "Paperclip CLI — orchestrate AI agent teams to run a business",
+  "description": "Paperclip CLI \u2014 orchestrate AI agent teams to run a business",
   "type": "module",
   "bin": {
     "paperclipai": "./dist/index.js"
@@ -52,7 +52,8 @@
     "dotenv": "^17.0.1",
     "commander": "^13.1.0",
     "embedded-postgres": "^18.1.0-beta.16",
-    "picocolors": "^1.1.1"
+    "picocolors": "^1.1.1",
+    "@paperclipai/adapter-openrouter": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.12.0",

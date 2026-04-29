@@ -1,0 +1,199 @@
+import type {
+  AdapterExecutionContext,
+  AdapterExecutionResult,
+  UsageSummary,
+} from "@paperclipai/adapter-utils";
+import { renderPaperclipWakePrompt } from "@paperclipai/adapter-utils/server-utils";
+import {
+  OPENROUTER_CHAT_ENDPOINT,
+  type OpenRouterConfig,
+} from "../index.js";
+import { PaperclipApi } from "./paperclip-api.js";
+import { loadSkills, renderSkillsForPrompt } from "./skills.js";
+import { emitAssistant, emitInit, emitResult, emitSystem } from "./transcript.js";
+
+function asString(value: unknown, fallback = ""): string {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : fallback;
+}
+
+function asNumber(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function readIssueId(ctx: AdapterExecutionContext): string | null {
+  const c = ctx.context ?? {};
+  const direct = asString(c.issueId);
+  if (direct) return direct;
+
+  const wake = c.paperclipWake;
+  if (wake && typeof wake === "object") {
+    const w = wake as Record<string, unknown>;
+    const id = asString(w.issueId) || asString(w.taskId);
+    if (id) return id;
+    const issue = w.issue;
+    if (issue && typeof issue === "object") {
+      const i = issue as Record<string, unknown>;
+      return asString(i.id) || asString(i.key);
+    }
+  }
+
+  return null;
+}
+
+function readWakePrompt(ctx: AdapterExecutionContext, skillsPrompt: string): string {
+  const wake = ctx.context?.paperclipWake;
+  if (wake) {
+    try {
+      return renderPaperclipWakePrompt(wake, {});
+    } catch {
+      return JSON.stringify(wake, null, 2);
+    }
+  }
+  return [
+    skillsPrompt,
+    typeof ctx.context?.prompt === "string" ? ctx.context.prompt : "",
+    typeof ctx.context?.instruction === "string" ? ctx.context.instruction : "",
+  ].filter(Boolean).join("\n\n");
+}
+
+function buildApi(ctx: AdapterExecutionContext): PaperclipApi | null {
+  if (!ctx.authToken) return null;
+  return new PaperclipApi({
+    authToken: ctx.authToken,
+    baseUrl: asString(process.env.PAPERCLIP_API_URL, "http://localhost:3100"),
+  });
+}
+
+async function addComment(api: PaperclipApi | null, issueId: string | null, body: string) {
+  if (!api || !issueId || !body.trim()) return;
+  await api.addIssueComment(issueId, { body });
+}
+
+async function updateStatus(api: PaperclipApi | null, issueId: string | null, status: string) {
+  if (!api || !issueId) return;
+  await api.updateIssue(issueId, { status });
+}
+
+export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExecutionResult> {
+  const config = ctx.config as unknown as OpenRouterConfig;
+  const model = asString(config.model, "openai/gpt-4o-mini");
+  const maxTokens = asNumber(config.maxTokens, 4096);
+  const apiKey = asString(config.apiKey) || asString(process.env.OPENROUTER_API_KEY);
+  const issueId = readIssueId(ctx);
+  const api = buildApi(ctx);
+
+  emitInit(ctx.onLog, { model, sessionId: ctx.runtime.sessionDisplayId ?? ctx.runtime.sessionId ?? ctx.runId });
+
+  if (!apiKey) {
+    const errorMessage = "OPENROUTER_API_KEY is not configured.";
+    emitSystem(ctx.onLog, errorMessage);
+    await addComment(api, issueId, errorMessage);
+    await updateStatus(api, issueId, "blocked");
+    return {
+      exitCode: 1,
+      signal: null,
+      timedOut: false,
+      errorMessage,
+      provider: "openrouter",
+      model,
+      billingType: "api",
+      summary: errorMessage,
+    };
+  }
+
+  let prompt = readWakePrompt(ctx, "");
+
+  if (!prompt.trim()) {
+    prompt = "Complete the assigned Paperclip issue. If no details are available, reply with a brief status.";
+  }
+
+  const body = {
+    model,
+    max_tokens: maxTokens,
+    temperature: typeof config.temperature === "number" ? config.temperature : 0.2,
+    messages: [
+      {
+        role: "system",
+        content: asString(config.systemPrompt, "You are a concise Paperclip agent. Follow the issue instructions exactly."),
+      },
+      {
+        role: "user",
+        content: prompt,
+      },
+    ],
+  };
+
+  let finalText = "";
+  let usage: UsageSummary | undefined;
+  let costUsd: number | null = null;
+
+  try {
+    const res = await fetch(OPENROUTER_CHAT_ENDPOINT, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": asString(config.httpReferer, "https://paperclip.geiger.local"),
+        "X-Title": asString(config.xTitle, "Geiger Paperclip Test"),
+      },
+      body: JSON.stringify(body),
+    });
+
+    const json = await res.json() as any;
+
+    if (!res.ok) {
+      const msg = typeof json?.error?.message === "string" ? json.error.message : `OpenRouter HTTP ${res.status}`;
+      throw new Error(msg);
+    }
+
+    finalText = String(json?.choices?.[0]?.message?.content ?? "").trim();
+    const inputTokens = Number(json?.usage?.prompt_tokens ?? 0);
+    const outputTokens = Number(json?.usage?.completion_tokens ?? 0);
+    usage = { inputTokens, outputTokens };
+
+    if (typeof json?.usage?.cost === "number") {
+      costUsd = json.usage.cost;
+    }
+
+    if (!finalText) finalText = "_(No output from OpenRouter model)_";
+
+    emitAssistant(ctx.onLog, finalText);
+    await addComment(api, issueId, finalText);
+    await updateStatus(api, issueId, "done");
+
+    emitResult(ctx.onLog, {
+      text: finalText.slice(0, 500),
+      inputTokens: usage?.inputTokens ?? 0,
+      outputTokens: usage?.outputTokens ?? 0,
+      costUsd: costUsd ?? undefined,
+    });
+
+    return {
+      exitCode: 0,
+      signal: null,
+      timedOut: false,
+      usage,
+      provider: "openrouter",
+      model,
+      billingType: "api",
+      costUsd,
+      summary: finalText.slice(0, 500),
+    };
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    emitSystem(ctx.onLog, `OpenRouter adapter failed: ${errorMessage}`);
+    await addComment(api, issueId, `OpenRouter adapter failed: ${errorMessage}`);
+    await updateStatus(api, issueId, "blocked");
+
+    return {
+      exitCode: 1,
+      signal: null,
+      timedOut: false,
+      errorMessage,
+      provider: "openrouter",
+      model,
+      billingType: "api",
+      summary: errorMessage,
+    };
+  }
+}

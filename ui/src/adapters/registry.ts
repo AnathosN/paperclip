@@ -9,6 +9,10 @@ import { openClawGatewayUIAdapter } from "./openclaw-gateway";
 import { hermesLocalUIAdapter } from "./hermes-local";
 import { processUIAdapter } from "./process";
 import { httpUIAdapter } from "./http";
+import {
+  buildConfig as openrouterBuildConfig,
+} from "@paperclipai/adapter-openrouter/ui";
+import { type as openrouterType, label as openrouterLabel } from "@paperclipai/adapter-openrouter";
 import { loadDynamicParser, invalidateDynamicParser, setDynamicParserResultNotifier } from "./dynamic-loader";
 import { SchemaConfigFields, buildSchemaAdapterConfig } from "./schema-config-fields";
 
@@ -59,6 +63,13 @@ function registerBuiltInUIAdapters() {
     openClawGatewayUIAdapter,
     processUIAdapter,
     httpUIAdapter,
+  {
+    type: openrouterType,
+    label: openrouterLabel,
+    parseStdoutLine: () => [],
+    ConfigFields: SchemaConfigFields,
+    buildAdapterConfig: openrouterBuildConfig,
+  },
   ]) {
     builtinTypes.add(adapter.type);
     builtinAdaptersByType.set(adapter.type, adapter);

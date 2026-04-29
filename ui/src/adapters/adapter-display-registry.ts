@@ -74,6 +74,11 @@ const adapterDisplayMap: Record<string, AdapterDisplayInfo> = {
     description: "Local multi-provider agent",
     icon: OpenCodeLogoIcon,
   },
+  openrouter: {
+    label: "OpenRouter",
+    description: "Direct OpenRouter API adapter",
+    icon: Cpu,
+  },
   hermes_local: {
     label: "Hermes Agent",
     description: "Local Hermes CLI agent",
