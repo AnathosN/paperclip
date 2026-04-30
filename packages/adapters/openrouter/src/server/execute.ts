@@ -20,6 +20,14 @@ function asNumber(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
+function normalizeOpenRouterModel(model: string): string {
+  const trimmed = model.trim();
+  if (trimmed.startsWith("openrouter/") && trimmed !== "openrouter/auto") {
+    return trimmed.slice("openrouter/".length);
+  }
+  return trimmed;
+}
+
 function readIssueId(ctx: AdapterExecutionContext): string | null {
   const c = ctx.context ?? {};
   const direct = asString(c.issueId);
@@ -76,7 +84,7 @@ async function updateStatus(api: PaperclipApi | null, issueId: string | null, st
 
 export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExecutionResult> {
   const config = ctx.config as unknown as OpenRouterConfig;
-  const model = asString(config.model, "openai/gpt-4o-mini");
+  const model = normalizeOpenRouterModel(asString(config.model, "openai/gpt-4o-mini"));
   const maxTokens = asNumber(config.maxTokens, 4096);
   const apiKey = asString(config.apiKey) || asString(process.env.OPENROUTER_API_KEY);
   const issueId = readIssueId(ctx);
@@ -135,7 +143,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     messages: [
       {
         role: "system",
-        content: asString(config.systemPrompt, "You are a concise Paperclip agent. Follow the issue instructions exactly."),
+        content: asString(
+          config.systemPrompt,
+          "You are a concise Paperclip agent. Follow the issue instructions exactly. Return only the user-facing answer. Do not output API calls, HTTP methods, JSON patches, tool-call descriptions, or status-update instructions. The adapter updates Paperclip status separately."
+        ),
       },
       {
         role: "user",
