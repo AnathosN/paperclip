@@ -208,7 +208,7 @@ function createSubIssueTool(ctx: BuildToolsContext): Tool {
             title: { type: "string" },
             description: { type: "string" },
             assignee_agent_id: { type: "string", description: "Optional agent id to assign to." },
-            priority: { type: "string", enum: ["low", "normal", "high", "urgent"] },
+            priority: { type: "string", enum: ["critical", "high", "medium", "low"] },
           },
           required: ["title"],
         },
@@ -218,13 +218,17 @@ function createSubIssueTool(ctx: BuildToolsContext): Tool {
       const parentId = asString(args.parent_issue_id, ctx.currentIssueId ?? "");
       const title = asString(args.title);
       if (!title) return fail("title is required.");
+      const assigneeAgentId = asString(args.assignee_agent_id);
+      const priority = asString(args.priority, "medium");
       const payload: Record<string, unknown> = {
         title,
         description: args.description ?? "",
         parentId: parentId || undefined,
-        assigneeAgentId: args.assignee_agent_id ?? undefined,
-        priority: args.priority ?? undefined,
+        priority: ["critical", "high", "medium", "low"].includes(priority) ? priority : "medium",
       };
+      if (assigneeAgentId) {
+        payload.assigneeAgentId = assigneeAgentId;
+      }
       return safeCall("create_sub_issue", () => ctx.api.createIssue(ctx.companyId, payload));
     },
   };
