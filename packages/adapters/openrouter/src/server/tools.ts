@@ -112,7 +112,7 @@ function updateIssueStatusTool(ctx: BuildToolsContext): Tool {
       function: {
         name: "update_issue_status",
         description:
-          "Move an issue to a new status. Valid statuses: open, in_progress, blocked, done, cancelled. " +
+          "Move an issue to a new status. Valid statuses: backlog, todo, in_progress, in_review, done, cancelled, blocked. " +
           "Defaults to the current issue.",
         parameters: {
           type: "object",
@@ -120,7 +120,7 @@ function updateIssueStatusTool(ctx: BuildToolsContext): Tool {
             issue_id: { type: "string", description: "Issue id. Omit to use the current issue." },
             status: {
               type: "string",
-              enum: ["open", "in_progress", "blocked", "done", "cancelled"],
+              enum: ["backlog", "todo", "in_progress", "in_review", "done", "cancelled", "blocked"],
             },
             reason: { type: "string", description: "Optional explanation." },
           },
@@ -244,7 +244,7 @@ function listIssuesTool(ctx: BuildToolsContext): Tool {
         parameters: {
           type: "object",
           properties: {
-            status: { type: "string" },
+            status: { type: "string", enum: ["backlog", "todo", "in_progress", "in_review", "done", "cancelled", "blocked"] },
             assignee_agent_id: { type: "string" },
             limit: { type: "number", description: "Max results, default 20." },
           },
@@ -253,8 +253,10 @@ function listIssuesTool(ctx: BuildToolsContext): Tool {
     },
     execute: async (args) => {
       const query: Record<string, string> = {};
-      if (typeof args.status === "string") query.status = args.status;
-      if (typeof args.assignee_agent_id === "string") query.assigneeAgentId = args.assignee_agent_id;
+      const status = asString(args.status);
+      const assigneeAgentId = asString(args.assignee_agent_id);
+      if (status) query.status = status;
+      if (assigneeAgentId) query.assigneeAgentId = assigneeAgentId;
       query.limit = String(typeof args.limit === "number" ? args.limit : 20);
       return safeCall("list_issues", () => ctx.api.listCompanyIssues(ctx.companyId, query));
     },
