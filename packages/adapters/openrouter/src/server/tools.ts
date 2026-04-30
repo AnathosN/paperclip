@@ -373,7 +373,9 @@ function requestApprovalTool(ctx: BuildToolsContext): Tool {
               description: "Approval type — must be one of the three supported values.",
             },
             summary: { type: "string", description: "One-line summary for the operator." },
-            payload: { type: "object", description: "Structured payload describing the action." },
+            payload: { type: "object", description: "Optional structured payload describing the action." },
+            payload_test: { type: "boolean", description: "Optional payload field: test flag." },
+            payload_source: { type: "string", description: "Optional payload field: source identifier." },
           },
           required: ["type", "summary"],
         },
@@ -384,7 +386,13 @@ function requestApprovalTool(ctx: BuildToolsContext): Tool {
       const summary = asString(args.summary);
       if (!type) return fail("type is required and must be hire_agent / approve_ceo_strategy / budget_override_required.");
       if (!summary) return fail("summary is required.");
-      const payload = (args.payload && typeof args.payload === "object" ? args.payload : {}) as Record<string, unknown>;
+      const payload = (args.payload && typeof args.payload === "object" && !Array.isArray(args.payload)
+        ? args.payload
+        : {}) as Record<string, unknown>;
+      if (typeof args.payload_test === "boolean") payload.test = args.payload_test;
+      if (typeof args.payload_source === "string" && args.payload_source.trim()) {
+        payload.source = args.payload_source.trim();
+      }
       return safeCall("request_approval", () =>
         ctx.api.createApproval(ctx.companyId, {
           type,
