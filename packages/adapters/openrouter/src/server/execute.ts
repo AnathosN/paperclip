@@ -10,7 +10,8 @@ import {
 } from "../index.js";
 import { PaperclipApi } from "./paperclip-api.js";
 import { loadSkills, renderSkillsForPrompt } from "./skills.js";
-import { emitAssistant, emitInit, emitResult, emitSystem } from "./transcript.js";
+import { emitAssistant, emitInit, emitResult, emitSystem, emitToolCall, emitToolResult } from "./transcript.js";
+import { buildTools, findTool, toolSchemas } from "./tools.js";
 
 function asString(value: unknown, fallback = ""): string {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : fallback;
@@ -18,6 +19,24 @@ function asString(value: unknown, fallback = ""): string {
 
 function asNumber(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function parseToolArguments(value: unknown): Record<string, unknown> {
+  if (typeof value !== "string" || value.trim().length === 0) return {};
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function readToolCallId(value: unknown): string {
+  return typeof value === "string" && value.length > 0
+    ? value
+    : `tool-${Math.random().toString(36).slice(2)}`;
 }
 
 function normalizeOpenRouterModel(model: string): string {
@@ -136,62 +155,156 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     prompt = "Complete the assigned Paperclip issue. If no details are available, reply with a brief status.";
   }
 
-  const body = {
-    model,
-    max_tokens: maxTokens,
-    temperature: typeof config.temperature === "number" ? config.temperature : 0.2,
-    messages: [
-      {
-        role: "system",
-        content: asString(
-          config.systemPrompt,
-          "You are a concise Paperclip agent. Follow the issue instructions exactly. Return only the user-facing answer. Do not output API calls, HTTP methods, JSON patches, tool-call descriptions, or status-update instructions. The adapter updates Paperclip status separately."
-        ),
-      },
-      {
-        role: "user",
-        content: prompt,
-      },
-    ],
-  };
+  const systemPrompt = asString(
+    config.systemPrompt,
+    "You are a concise Paperclip agent. Follow the issue instructions exactly. Return only the user-facing answer. Do not output API calls, HTTP methods, JSON patches, tool-call descriptions, or status-update instructions. Use available tools when you need to comment, update status, inspect the issue, or create follow-up work."
+  );
+
+  const messages: Array<Record<string, unknown>> = [
+    {
+      role: "system",
+      content: systemPrompt,
+    },
+    {
+      role: "user",
+      content: prompt,
+    },
+  ];
+
+  const tools = api
+    ? buildTools({
+        api,
+        agentId: ctx.agent.id,
+        companyId: ctx.agent.companyId,
+        currentIssueId: issueId,
+        autoApprove: config.autoApprove === true,
+      })
+    : [];
 
   let finalText = "";
   let usage: UsageSummary | undefined;
   let costUsd: number | null = null;
+  let commentPostedByTool = false;
+  let statusUpdatedByTool = false;
 
   try {
-    const res = await fetch(OPENROUTER_CHAT_ENDPOINT, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-        "HTTP-Referer": asString(config.httpReferer, "https://paperclip.local"),
-        "X-Title": asString(config.xTitle, "Paperclip OpenRouter Adapter"),
-      },
-      body: JSON.stringify(body),
-    });
+    const maxTurns = Math.max(1, Math.min(asNumber(config.maxTurns, 8), 25));
 
-    const json = await res.json() as any;
+    for (let turn = 0; turn < maxTurns; turn += 1) {
+      const requestBody: Record<string, unknown> = {
+        model,
+        max_tokens: maxTokens,
+        temperature: typeof config.temperature === "number" ? config.temperature : 0.2,
+        messages,
+      };
 
-    if (!res.ok) {
-      const msg = typeof json?.error?.message === "string" ? json.error.message : `OpenRouter HTTP ${res.status}`;
-      throw new Error(msg);
+      if (tools.length > 0) {
+        requestBody.tools = toolSchemas(tools);
+        requestBody.tool_choice = "auto";
+      }
+
+      const res = await fetch(OPENROUTER_CHAT_ENDPOINT, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+          "HTTP-Referer": asString(config.httpReferer, "https://paperclip.local"),
+          "X-Title": asString(config.xTitle, "Paperclip OpenRouter Adapter"),
+        },
+        body: JSON.stringify(requestBody),
+      });
+
+      const json = await res.json() as any;
+
+      if (!res.ok) {
+        const msg = typeof json?.error?.message === "string" ? json.error.message : `OpenRouter HTTP ${res.status}`;
+        throw new Error(msg);
+      }
+
+      const inputTokens = Number(json?.usage?.prompt_tokens ?? 0);
+      const outputTokens = Number(json?.usage?.completion_tokens ?? 0);
+      usage = {
+        inputTokens: (usage?.inputTokens ?? 0) + inputTokens,
+        outputTokens: (usage?.outputTokens ?? 0) + outputTokens,
+      };
+
+      if (typeof json?.usage?.cost === "number") {
+        costUsd = (costUsd ?? 0) + json.usage.cost;
+      }
+
+      const message = json?.choices?.[0]?.message ?? {};
+      const content = typeof message.content === "string" ? message.content.trim() : "";
+      const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
+
+      if (toolCalls.length > 0) {
+        messages.push({
+          role: "assistant",
+          content: content || null,
+          tool_calls: toolCalls,
+        });
+
+        for (const toolCall of toolCalls) {
+          const toolCallId = readToolCallId(toolCall?.id);
+          const functionName = typeof toolCall?.function?.name === "string" ? toolCall.function.name : "";
+          const tool = findTool(tools, functionName);
+          const args = parseToolArguments(toolCall?.function?.arguments);
+
+          await emitToolCall(ctx.onLog, {
+            name: functionName || "unknown_tool",
+            input: args,
+            toolUseId: toolCallId,
+          });
+
+          const result = tool
+            ? await tool.execute(args)
+            : { content: JSON.stringify({ error: `Unknown tool: ${functionName}` }), isError: true };
+
+          await emitToolResult(ctx.onLog, {
+            toolUseId: toolCallId,
+            toolName: functionName || "unknown_tool",
+            content: result.content,
+            isError: result.isError,
+          });
+
+          if (!result.isError && functionName === "add_comment") {
+            commentPostedByTool = true;
+          }
+          if (!result.isError && functionName === "update_issue_status") {
+            statusUpdatedByTool = true;
+          }
+
+          messages.push({
+            role: "tool",
+            tool_call_id: toolCallId,
+            name: functionName,
+            content: result.content,
+          });
+        }
+
+        continue;
+      }
+
+      if (content) {
+        finalText = content;
+      }
+
+      break;
     }
 
-    finalText = String(json?.choices?.[0]?.message?.content ?? "").trim();
-    const inputTokens = Number(json?.usage?.prompt_tokens ?? 0);
-    const outputTokens = Number(json?.usage?.completion_tokens ?? 0);
-    usage = { inputTokens, outputTokens };
-
-    if (typeof json?.usage?.cost === "number") {
-      costUsd = json.usage.cost;
+    if (!finalText && !commentPostedByTool) {
+      finalText = "_(No output from OpenRouter model)_";
     }
 
-    if (!finalText) finalText = "_(No output from OpenRouter model)_";
+    if (finalText && !commentPostedByTool) {
+      await emitAssistant(ctx.onLog, finalText);
+      await addComment(api, issueId, finalText);
+    } else if (finalText) {
+      await emitAssistant(ctx.onLog, finalText);
+    }
 
-    emitAssistant(ctx.onLog, finalText);
-    await addComment(api, issueId, finalText);
-    await updateStatus(api, issueId, "done");
+    if (!statusUpdatedByTool) {
+      await updateStatus(api, issueId, "done");
+    }
 
     emitResult(ctx.onLog, {
       text: finalText.slice(0, 500),
