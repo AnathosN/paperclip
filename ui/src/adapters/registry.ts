@@ -10,6 +10,7 @@ import { hermesLocalUIAdapter } from "./hermes-local";
 import { processUIAdapter } from "./process";
 import { httpUIAdapter } from "./http";
 import {
+  parseStdout as openrouterParseStdout,
   buildConfig as openrouterBuildConfig,
 } from "@paperclipai/adapter-openrouter/ui";
 import { type as openrouterType, label as openrouterLabel } from "@paperclipai/adapter-openrouter";
@@ -66,7 +67,7 @@ function registerBuiltInUIAdapters() {
   {
     type: openrouterType,
     label: openrouterLabel,
-    parseStdoutLine: () => [],
+    parseStdoutLine: openrouterParseStdout,
     ConfigFields: SchemaConfigFields,
     buildAdapterConfig: openrouterBuildConfig,
   },

@@ -103,6 +103,27 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
   let prompt = readWakePrompt(ctx, "");
 
+  if (api && issueId) {
+    try {
+      const issue = await api.getIssue(issueId);
+      const title = typeof issue.title === "string" ? issue.title : "";
+      const description = typeof issue.description === "string" ? issue.description : "";
+      const key = typeof issue.key === "string" ? issue.key : issueId;
+
+      const issuePrompt = [
+        "Paperclip issue instruction. Follow this instruction exactly.",
+        "",
+        `Issue: ${key}`,
+        title ? `Title: ${title}` : "",
+        description ? `Description:\n${description}` : "",
+      ].filter(Boolean).join("\n");
+
+      prompt = `${issuePrompt}\n\nAdditional wake context:\n${prompt}`;
+    } catch (err) {
+      emitSystem(ctx.onLog, `Could not load issue details, continuing with wake context only: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   if (!prompt.trim()) {
     prompt = "Complete the assigned Paperclip issue. If no details are available, reply with a brief status.";
   }
