@@ -169,6 +169,58 @@ function addCommentTool(ctx: BuildToolsContext): Tool {
   };
 }
 
+function upsertIssueDocumentTool(ctx: BuildToolsContext): Tool {
+  return {
+    schema: {
+      type: "function",
+      function: {
+        name: "upsert_issue_document",
+        description:
+          "Create or update a Markdown document attached to an issue. " +
+          "Use this when the user asks you to create a document, concept, report, plan, or longer Markdown artifact in Paperclip. " +
+          "Defaults to the current issue.",
+        parameters: {
+          type: "object",
+          properties: {
+            issue_id: { type: "string", description: "Issue id. Omit to use the current issue." },
+            key: {
+              type: "string",
+              description:
+                "Stable document key in lowercase kebab-case, for example social-media-konzept or dokumententest. " +
+                "Do not include a file extension.",
+            },
+            title: { type: "string", description: "Human-readable document title, max 200 characters." },
+            body: { type: "string", description: "Markdown document body, max 524288 characters." },
+            change_summary: { type: "string", description: "Short summary of what was created or changed, max 500 characters." },
+            base_revision_id: { type: "string", description: "Optional base revision id when updating an existing document." },
+          },
+          required: ["key", "body"],
+        },
+      },
+    },
+    execute: async (args) => {
+      const id = asString(args.issue_id, ctx.currentIssueId ?? "");
+      if (!id) return fail("No issue_id supplied and no current issue.");
+      const key = asString(args.key).trim().toLowerCase();
+      if (!key) return fail("key is required.");
+      const body = asString(args.body);
+      if (!body) return fail("body is required.");
+      const title = asString(args.title, key);
+      const changeSummary = asString(args.change_summary, "Created or updated issue document.");
+      const baseRevisionId = asString(args.base_revision_id);
+      return safeCall("upsert_issue_document", () =>
+        ctx.api.upsertIssueDocument(id, key, {
+          title,
+          format: "markdown",
+          body,
+          changeSummary,
+          baseRevisionId: baseRevisionId || null,
+        }),
+      );
+    },
+  };
+}
+
 function listCommentsTool(ctx: BuildToolsContext): Tool {
   return {
     schema: {
@@ -411,6 +463,7 @@ export function buildTools(ctx: BuildToolsContext): Tool[] {
     getIssueTool(ctx),
     updateIssueStatusTool(ctx),
     addCommentTool(ctx),
+    upsertIssueDocumentTool(ctx),
     listCommentsTool(ctx),
     createSubIssueTool(ctx),
     listIssuesTool(ctx),

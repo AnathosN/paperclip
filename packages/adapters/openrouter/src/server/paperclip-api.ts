@@ -169,6 +169,26 @@ export class PaperclipApi {
     return this.request("POST", `/api/issues/${encodeURIComponent(issueId)}/comments`, body);
   }
 
+  // ----- Issue documents -----
+
+  upsertIssueDocument(
+    issueId: string,
+    key: string,
+    document: {
+      title?: string | null;
+      format: "markdown";
+      body: string;
+      changeSummary?: string | null;
+      baseRevisionId?: string | null;
+    },
+  ): Promise<Record<string, unknown>> {
+    return this.request(
+      "PUT",
+      `/api/issues/${encodeURIComponent(issueId)}/documents/${encodeURIComponent(key)}`,
+      document,
+    );
+  }
+
   // ----- Agents -----
 
   /**
