@@ -64,13 +64,13 @@ function registerBuiltInUIAdapters() {
     openClawGatewayUIAdapter,
     processUIAdapter,
     httpUIAdapter,
-  {
-    type: openrouterType,
-    label: openrouterLabel,
-    parseStdoutLine: openrouterParseStdout,
-    ConfigFields: SchemaConfigFields,
-    buildAdapterConfig: openrouterBuildConfig,
-  },
+    {
+      type: openrouterType,
+      label: openrouterLabel,
+      parseStdoutLine: openrouterParseStdout,
+      ConfigFields: SchemaConfigFields,
+      buildAdapterConfig: openrouterBuildConfig,
+    },
   ]) {
     builtinTypes.add(adapter.type);
     builtinAdaptersByType.set(adapter.type, adapter);
