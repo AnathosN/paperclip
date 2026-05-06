@@ -75,6 +75,14 @@ function asString(v: unknown, fallback = ""): string {
   return typeof v === "string" && v.length > 0 ? v : fallback;
 }
 
+function asNullableUuid(v: unknown): string | null {
+  if (typeof v !== "string") return null;
+  const value = v.trim();
+  if (!value) return null;
+  const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  return uuidPattern.test(value) ? value : null;
+}
+
 // ----- tool builders -----
 
 function getIssueTool(ctx: BuildToolsContext): Tool {
@@ -192,7 +200,12 @@ function upsertIssueDocumentTool(ctx: BuildToolsContext): Tool {
             title: { type: "string", description: "Human-readable document title, max 200 characters." },
             body: { type: "string", description: "Markdown document body, max 524288 characters." },
             change_summary: { type: "string", description: "Short summary of what was created or changed, max 500 characters." },
-            base_revision_id: { type: "string", description: "Optional base revision id when updating an existing document." },
+            base_revision_id: {
+              type: "string",
+              description:
+                "Optional base revision UUID when updating an existing document. " +
+                "Only pass a real UUID. Never pass revision numbers like 1, rev1, or Revision 1.",
+            },
           },
           required: ["key", "body"],
         },
@@ -207,16 +220,30 @@ function upsertIssueDocumentTool(ctx: BuildToolsContext): Tool {
       if (!body) return fail("body is required.");
       const title = asString(args.title, key);
       const changeSummary = asString(args.change_summary, "Created or updated issue document.");
-      const baseRevisionId = asString(args.base_revision_id);
-      return safeCall("upsert_issue_document", () =>
+      const rawBaseRevisionId = asString(args.base_revision_id);
+      const baseRevisionId = asNullableUuid(rawBaseRevisionId);
+      const ignoredInvalidBaseRevisionId = rawBaseRevisionId && !baseRevisionId ? rawBaseRevisionId : null;
+
+      const result = await safeCall("upsert_issue_document", () =>
         ctx.api.upsertIssueDocument(id, key, {
           title,
           format: "markdown",
           body,
           changeSummary,
-          baseRevisionId: baseRevisionId || null,
+          baseRevisionId,
         }),
       );
+
+      if (!result.isError && ignoredInvalidBaseRevisionId) {
+        return ok({
+          result: JSON.parse(result.content),
+          warning:
+            "Ignored invalid base_revision_id because Paperclip expects a UUID, not a revision number or label.",
+          ignored_base_revision_id: ignoredInvalidBaseRevisionId,
+        });
+      }
+
+      return result;
     },
   };
 }
